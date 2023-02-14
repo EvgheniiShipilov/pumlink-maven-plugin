@@ -1,8 +1,10 @@
 package tech.pumlink;
 
+import static java.util.Collections.emptySet;
 import static java.util.Collections.singletonList;
 
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.HashSet;
@@ -10,23 +12,17 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.apache.maven.model.Dependency;
+import org.apache.maven.model.Model;
+import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
 import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.project.DefaultMavenProjectBuilder;
-import org.apache.maven.project.DefaultProjectBuilderConfiguration;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectBuilderConfiguration;
-import org.apache.maven.project.ProjectBuildingException;
+import org.apache.maven.project.*;
 
-@Mojo(name = "pumlink", defaultPhase = LifecyclePhase.COMPILE)
-public class PumlinkMojo extends AbstractMojo {
-
-  public static final DefaultMavenProjectBuilder MAVEN_PROJECT_BUILDER =
-      new DefaultMavenProjectBuilder();
+@Mojo(name = "verify", defaultPhase = LifecyclePhase.COMPILE)
+public class VerifyMojo extends AbstractMojo {
 
   @Parameter(defaultValue = "${project}", required = true, readonly = true)
   MavenProject project;
@@ -39,11 +35,8 @@ public class PumlinkMojo extends AbstractMojo {
   @Parameter(defaultValue = "true", readonly = true)
   Boolean relaxedNaming;
 
-  private static final ProjectBuilderConfiguration PROJECT_BUILDER_CONFIGURATION =
-      new DefaultProjectBuilderConfiguration();
-
   @Override
-  public void execute() throws MojoExecutionException, MojoFailureException {
+  public void execute() throws MojoFailureException {
     File pumlSource = new File(project.getBasedir() + "/project.puml");
     if (!pumlSource.exists()) {
       getLog().warn("No PUML defined for " + project.getName());
@@ -70,12 +63,13 @@ public class PumlinkMojo extends AbstractMojo {
     validatePuml(expectedPumlLines, pumlSource);
   }
 
-  private void validatePuml(Set<String> expectedPumlComponents, File pumlSource) {
+  private void validatePuml(Set<String> expectedPumlComponents, File pumlSource)
+      throws MojoFailureException {
     List<String> allPumlLines;
     try {
       allPumlLines = Files.readAllLines(pumlSource.toPath());
     } catch (IOException e) {
-      throw new RuntimeException(e);
+      throw new MojoFailureException(e);
     }
     Set<String> missingComponents =
         expectedPumlComponents.stream()
@@ -94,6 +88,14 @@ public class PumlinkMojo extends AbstractMojo {
   }
 
   private Set<MavenProject> getIncomingDependencies() {
+    if (!project.hasParent()) {
+      getLog()
+          .debug(
+              "Project"
+                  + project.getName()
+                  + " has no parent project, will not calculate incoming dependencies based on that.");
+      return emptySet();
+    }
     return getAllRelatedProjects(project.getParent()).stream()
         .filter(this::isRelated)
         .collect(Collectors.toSet());
@@ -120,11 +122,12 @@ public class PumlinkMojo extends AbstractMojo {
     getLog().info("Checking pom.xml in path: " + targetProject.getBasedir());
     // Get child modules recursively.
     return modulesNames.stream()
-        .map(moduleName -> project.getBasedir() + "/" + moduleName + "pom.xml")
+        .map(moduleName -> targetProject.getBasedir() + "/" + moduleName + "/" + "pom.xml")
+        .peek(path -> getLog().debug("Checking sibling pom.xml: " + path))
         .map(File::new)
         .filter(File::exists)
-        .peek(pom -> getLog().debug("Found nested pom.xml: " + pom.getPath()))
-        .map(PumlinkMojo::buildMavenProject)
+        .peek(pom -> getLog().debug("Found sibling pom.xml: " + pom.getPath()))
+        .map(this::buildMavenProject)
         .flatMap(mavenProject -> getAllRelatedProjects(mavenProject).stream())
         .collect(Collectors.toList());
   }
@@ -135,11 +138,14 @@ public class PumlinkMojo extends AbstractMojo {
         .collect(Collectors.toSet());
   }
 
-  private static MavenProject buildMavenProject(File pom) {
+  private MavenProject buildMavenProject(File pom) {
     try {
-      return MAVEN_PROJECT_BUILDER.build(pom, PROJECT_BUILDER_CONFIGURATION);
-    } catch (ProjectBuildingException e) {
-      throw new RuntimeException(e);
+      FileReader fileReader = new FileReader(pom);
+      Model model = new MavenXpp3Reader().read(fileReader);
+      return new MavenProject(model);
+    } catch (Exception ex) {
+      getLog().error("Error reading pom.xml: " + pom.getName());
+      throw new IllegalStateException(ex);
     }
   }
 }

@@ -10,8 +10,9 @@ mvn clean install
 submodules.
 3. Run the plugin from the chosen module:
 ``` 
-mvn tech.pumlink:pumlink-maven-plugin:0.0.1-SNAPSHOT:pumlink
+mvn tech.pumlink:pumlink-maven-plugin:0.0.1-SNAPSHOT:verify
 ```
+TODO: a shortened version should work as well, do check. 
 You should see something like:
 ```
 org.apache.maven.lifecycle.LifecycleExecutionException: 
